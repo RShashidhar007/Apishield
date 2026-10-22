@@ -1,0 +1,42 @@
+server:
+  port: ${PORT:8090}
+  shutdown: graceful
+  max-http-request-header-size: 16KB
+spring:
+  application.name: apishield-gateway
+  lifecycle.timeout-per-shutdown-phase: 20s
+  data.redis:
+    host: ${REDIS_HOST:localhost}
+    port: ${REDIS_PORT:6379}
+    password: ${REDIS_PASSWORD:}
+    timeout: 300ms
+    connect-timeout: 500ms
+  cloud.gateway:
+    httpclient:
+      connect-timeout: 2000
+      response-timeout: 10s
+      pool: { type: elastic, max-idle-time: 30s }
+    x-forwarded: { enabled: true }
+    forwarded: { enabled: true }
+    default-filters: []
+management:
+  endpoints.web.exposure.include: health,info
+  endpoint.health:
+    probes.enabled: true
+    show-details: never
+    group.readiness.include: readinessState,gatewayConfig
+gateway:
+  management-url: ${MANAGEMENT_URL:http://localhost:8080}
+  gateway-token: ${GATEWAY_TOKEN}
+  api-key-pepper: ${API_KEY_PEPPER}
+  jwt: { secret: "${JWT_SECRET}", issuer: "${JWT_ISSUER:apishield}", audience: "${JWT_AUDIENCE:apishield-clients}" }
+  config-refresh-ms: ${CONFIG_REFRESH_MS:5000}
+  max-stale-seconds: ${MAX_CONFIG_STALE_SECONDS:0}      # 0 = keep serving last known config indefinitely
+  rate-limit-redis-timeout-ms: ${RATE_LIMIT_REDIS_TIMEOUT_MS:200}
+  trusted-proxies: ${TRUSTED_PROXIES:}                    # comma separated IPs/CIDRs allowed to set X-Forwarded-For
+  ingest: { flush-interval-ms: 5000, queue-capacity: 20000, batch-size: 500 }
+  destination:
+    allowed-hosts: ${ALLOWED_UPSTREAM_HOSTS:catalog-service,order-service}
+    allowed-ports: ${ALLOWED_UPSTREAM_PORTS:}
+    allow-private-for-allowed-hosts: ${ALLOW_PRIVATE_UPSTREAMS:true}
+    allow-loopback: ${ALLOW_LOOPBACK_UPSTREAMS:false}

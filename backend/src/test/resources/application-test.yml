@@ -1,0 +1,16 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:apishield;MODE=MSSQLServer;DB_CLOSE_DELAY=-1
+    username: sa
+    password: ""
+  jpa:
+    hibernate.ddl-auto: create-drop
+  flyway.enabled: false
+apishield:
+  jwt: { secret: "test-secret-test-secret-test-secret-123456", issuer: apishield, audience: apishield-clients, access-ttl: PT15M, refresh-ttl: P7D }
+  gateway-token: "test-gateway-token-test-gateway-token"
+  api-key-pepper: "test-pepper-test-pepper-test-pepper-123"
+  destination:
+    allowed-hosts: catalog-service,order-service
+    allow-private-for-allowed-hosts: true
+  login: { max-failed-attempts: 3, lock-minutes: 15 }

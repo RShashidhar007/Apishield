@@ -1,0 +1,10 @@
+gateway:
+  management-url: http://localhost:1
+  gateway-token: "test-gateway-token-test-gateway-token"
+  api-key-pepper: "test-pepper-test-pepper-test-pepper-123"
+  jwt: { secret: "test-secret-test-secret-test-secret-123456", issuer: apishield, audience: apishield-clients }
+  config-refresh-ms: 3600000
+  ingest: { flush-interval-ms: 3600000 }
+  destination:
+    allowed-hosts: localhost,127.0.0.1
+    allow-private-for-allowed-hosts: true

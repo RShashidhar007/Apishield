@@ -1,0 +1,7 @@
+**/target
+**/node_modules
+frontend/dist
+frontend/.angular
+.git
+.env
+docs

@@ -1,0 +1,4 @@
+server:
+  port: 8081
+  shutdown: graceful
+management.endpoints.web.exposure.include: health

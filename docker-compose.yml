@@ -1,0 +1,126 @@
+# APIShield local stack. Published ports are bound to 127.0.0.1 and are for local development only.
+#   frontend :4200  (app + reverse proxy for /api and /gateway)
+#   backend  :8080  (management API / Swagger UI)  -- dev convenience, not needed in production
+#   gateway  :8090  (gateway runtime)              -- dev convenience, smoke tests
+# SQL Server and Redis are NOT published.
+name: apishield
+x-java-common: &java-common
+  restart: unless-stopped
+  stop_grace_period: 30s
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: ["ALL"]
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    restart: unless-stopped
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?set MSSQL_SA_PASSWORD in .env}
+      MSSQL_PID: Developer
+    volumes: ["sqldata:/var/opt/mssql"]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' -b -o /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  db-init:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    depends_on: { sqlserver: { condition: service_healthy } }
+    restart: "no"
+    environment:
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD}
+      APP_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    volumes: ["./infra/sql/init.sql:/init.sql:ro"]
+    entrypoint: ["/bin/bash", "-c", "/opt/mssql-tools18/bin/sqlcmd -C -S sqlserver -U sa -P \"$$MSSQL_SA_PASSWORD\" -b -v APP_PASSWORD=\"$$APP_PASSWORD\" -i /init.sql"]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    environment: { REDIS_PASSWORD: "${REDIS_PASSWORD}" }
+
+  backend:
+    <<: *java-common
+    build: { context: ., dockerfile: infra/Dockerfile.java, args: { MODULE: backend } }
+    depends_on:
+      db-init: { condition: service_completed_successfully }
+      sqlserver: { condition: service_healthy }
+    environment:
+      DB_URL: jdbc:sqlserver://sqlserver:1433;databaseName=apishield;encrypt=true;trustServerCertificate=true
+      DB_USERNAME: apishield_app
+      DB_PASSWORD: ${DB_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      API_KEY_PEPPER: ${API_KEY_PEPPER:?set API_KEY_PEPPER in .env}
+      GATEWAY_TOKEN: ${GATEWAY_TOKEN:?set GATEWAY_TOKEN in .env}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+      ALLOWED_UPSTREAM_HOSTS: ${ALLOWED_UPSTREAM_HOSTS:-catalog-service,order-service}
+      ALLOW_PRIVATE_UPSTREAMS: ${ALLOW_PRIVATE_UPSTREAMS:-true}
+      ALLOW_LOOPBACK_UPSTREAMS: ${ALLOW_LOOPBACK_UPSTREAMS:-false}
+      CORS_ALLOWED_ORIGINS: http://localhost:4200
+      JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-PT15M}
+      JWT_REFRESH_TTL: ${JWT_REFRESH_TTL:-P7D}
+      RETENTION_REQUEST_LOG_DAYS: ${RETENTION_REQUEST_LOG_DAYS:-30}
+      RETENTION_SECURITY_EVENT_DAYS: ${RETENTION_SECURITY_EVENT_DAYS:-180}
+    ports: ["127.0.0.1:8080:8080"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/actuator/health/readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+
+  gateway:
+    <<: *java-common
+    build: { context: ., dockerfile: infra/Dockerfile.java, args: { MODULE: gateway } }
+    depends_on:
+      backend: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    environment:
+      MANAGEMENT_URL: http://backend:8080
+      REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      API_KEY_PEPPER: ${API_KEY_PEPPER}
+      GATEWAY_TOKEN: ${GATEWAY_TOKEN}
+      ALLOWED_UPSTREAM_HOSTS: ${ALLOWED_UPSTREAM_HOSTS:-catalog-service,order-service}
+      ALLOW_PRIVATE_UPSTREAMS: ${ALLOW_PRIVATE_UPSTREAMS:-true}
+      ALLOW_LOOPBACK_UPSTREAMS: ${ALLOW_LOOPBACK_UPSTREAMS:-false}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.16.0.0/12}
+      CONFIG_REFRESH_MS: ${CONFIG_REFRESH_MS:-5000}
+      MAX_CONFIG_STALE_SECONDS: ${MAX_CONFIG_STALE_SECONDS:-0}
+    ports: ["127.0.0.1:8090:8090"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8090/actuator/health/readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  catalog-service:
+    <<: *java-common
+    build: { context: ., dockerfile: infra/Dockerfile.java, args: { MODULE: examples/catalog-service } }
+    healthcheck: { test: ["CMD", "curl", "-fsS", "http://localhost:8081/actuator/health"], interval: 10s, timeout: 5s, retries: 20, start_period: 20s }
+
+  order-service:
+    <<: *java-common
+    build: { context: ., dockerfile: infra/Dockerfile.java, args: { MODULE: examples/order-service } }
+    healthcheck: { test: ["CMD", "curl", "-fsS", "http://localhost:8082/actuator/health"], interval: 10s, timeout: 5s, retries: 20, start_period: 20s }
+
+  frontend:
+    build: { context: ., dockerfile: infra/Dockerfile.frontend }
+    restart: unless-stopped
+    depends_on: { backend: { condition: service_healthy }, gateway: { condition: service_healthy } }
+    ports: ["127.0.0.1:4200:8080"]
+    security_opt: ["no-new-privileges:true"]
+
+volumes:
+  sqldata:
